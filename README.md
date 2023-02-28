@@ -1,6 +1,6 @@
 # DriveSync
 
-**DriveSync** is a small Python module that enable to easily synchronize a local repository with a Google Drive folder.
+**DriveSync** is a small Python package that enable to easily synchronize a local repository with a Google Drive folder.
 The behavior was inspired from GitHub (`push` and `pull` commands) to manage only the files / folders that were 
 created or modified locally / remotely.
 
