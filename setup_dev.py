@@ -1,15 +1,16 @@
-from sys import argv
+from sys import argv, executable
 from os import symlink, unlink, remove
 from os.path import join, islink, dirname, sep
 from shutil import which
 from pathlib import Path
-from site import USER_SITE
+from site import getsitepackages
 from pip._internal.operations.install.wheel import PipScriptMaker
 
 
 # Package information
 PROJECT = 'DriveSync'
 root = join(Path(__file__).parent.absolute(), 'src')
+USER_SITE = getsitepackages()[0]
 
 # Check user entry
 if len(argv) == 2 and argv[1] not in ['set', 'del']:
@@ -28,10 +29,10 @@ if len(argv) == 1 or argv[1] == 'set':
     # Create the CLI
     if which('drive_sync') is None:
         # Generate the scripts
-        maker = PipScriptMaker(None, dirname(which('pip3')))
-        generated_scripts = maker.make_multiple(['drive_sync=DriveSync.drive_sync:execute_cli'])
+        maker = PipScriptMaker(None, dirname(executable))
+        generated_scripts = maker.make_multiple(['dsync=DriveSync.drive_sync:execute_cli'])
         for script in generated_scripts:
-            if script.split(sep)[-1].split('.')[0] != 'drive_sync':
+            if script.split(sep)[-1].split('.')[0] != 'dsync':
                 remove(script)
 
 # Option 2: remove the symbolic links
@@ -39,4 +40,4 @@ else:
     if islink(join(USER_SITE, PROJECT)):
         unlink(join(USER_SITE, PROJECT))
         print(f"Unlinked {join(USER_SITE, PROJECT)} -> {join(root)}")
-        remove(which('drive_sync'))
+        remove(which('dsync'))

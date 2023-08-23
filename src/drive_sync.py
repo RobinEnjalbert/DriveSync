@@ -1,13 +1,19 @@
-from typing import List, Tuple, Optional
-from os import listdir, mkdir, remove, getcwd, chdir
-from os.path import getmtime, join, isdir, dirname, exists
+from typing import List, Dict, Optional
+from os import listdir, mkdir, remove, getcwd, chdir, rename
+from os.path import getmtime, join, isdir, isfile, exists, sep
 from shutil import rmtree
 from datetime import datetime
 from json import load, dump
-from pydrive.auth import GoogleAuth
-from pydrive.drive import GoogleDrive
-from pydrive.files import GoogleDriveFile
+from pydrive2.auth import GoogleAuth
+from pydrive2.drive import GoogleDrive
+from pydrive2.files import GoogleDriveFile
 from argparse import ArgumentParser, RawTextHelpFormatter
+
+
+SYNC_INFO_DIR = '.dsync'
+AUTH_FILE = 'client_secrets.json'
+IGNORE_FILE = 'ignore.txt'
+REMOTE_FILE = 'remote_root.txt'
 
 
 def execute_cli() -> None:
@@ -20,15 +26,15 @@ def execute_cli() -> None:
                   "  * 'push': synchronize the remote Drive repository with the local repository.\n" \
                   "  * 'pull': synchronize the local repository with the remote Drive repository."
     available_actions = ['config', 'push', 'pull']
+
     parser = ArgumentParser(prog='drive_sync', description=description, formatter_class=RawTextHelpFormatter)
     parser.add_argument('command', default='config', type=str, choices=available_actions, nargs='?')
     args = parser.parse_args()
-
     if args.command == 'config':
         configure()
     elif args.command == 'push':
         upload_data()
-    else:
+    elif args.command == 'pull':
         download_data()
 
 
@@ -37,57 +43,49 @@ def configure() -> None:
     Configure the Google Drive token and the path to the remote repository to synchronize.
     """
 
-    # 1. Configure Drive token
-    update_token = True
-    token_path = join(dirname(__file__), 'client_secrets.json')
-    # 1.1. Check existing token
-    if exists(token_path):
-        with open(token_path, 'r') as file:
-            token = load(file)
-        print(f"\nYou already have an authentication configuration file with the following information:\n"
-              f"  - 'project_id': {token['installed']['project_id']}\n"
-              f"  - 'client_id': {token['installed']['client_id']}\n"
-              f"  - 'client_secret': {token['installed']['client_secret']}")
-        while (change := input("Update authentication: ").lower()) not in ['y', 'yes', 'n', 'no']:
-            pass
-        if change in ['n', 'no']:
-            update_token = False
-    # 1.2. Define a new token
-    if update_token:
-        token = {'installed': {'client_id': '',
-                               'project_id': '',
-                               'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
-                               'token_uri': 'https://oauth2.googleapis.com/token',
-                               'auth_provider_x509_cert_url': 'https://www.googleapis.com/oauth2/v1/certs',
-                               'client_secret': '',
-                               'redirect_uris': ['http://localhost']}}
-        print("\nAuthentication:")
-        token['installed']['project_id'] = input("  - 'project_id': ")
-        token['installed']['client_id'] = input("  - 'client_id': ")
-        token['installed']['client_secret'] = input("  - 'client_secret': ")
-        with open(token_path, 'w') as file:
-            dump(token, file)
+    # 1. Set the local root repository
+    print("\nGOOGLE DRIVE SYNCHRONIZATION - Configuration"
+          "\n--------------------------------------------")
+    local_root = getcwd()
+
+    # 2. Configure Google Drive authentication
+    print("\nTesting the authentication...")
+    sync_info_dir = join(local_root, SYNC_INFO_DIR)
+    # 2.1. First configuration
+    if not exists(sync_info_dir):
+        # 2.1.1. Check the auth file existence
+        if not exists(join(local_root, AUTH_FILE)):
+            raise FileNotFoundError(f"The file {join(local_root, AUTH_FILE)} does not exist."
+                                    f"\nPlease provide the authentication information file (follow instructions: "
+                                    f"https://github.com/RobinEnjalbert/DriveSync#using-the-project)")
+        # 2.1.2. Try to authenticate
+        auth = GoogleAuth()
+        auth.LocalWebserverAuth()
+        # 2.1.3. Create the sync folder
+        mkdir(sync_info_dir)
+        rename(src=join(local_root, AUTH_FILE),
+               dst=join(sync_info_dir, AUTH_FILE))
+        with open(join(sync_info_dir, REMOTE_FILE), 'w') as f:
+            f.write(local_root.split(sep)[-1])
+        with open(join(sync_info_dir, IGNORE_FILE), 'w') as f:
+            default = '\n'.join(['/.dsync', '/.git', '/.idea', '/__pycache__', '/venv'])
+            f.write(f"# Extensions to ignore (ex: *.txt, *.pdf)\n\n\n"
+                    f"# Folders to ignore (ex: /data, /tmp)\n{default}\n\n"
+                    f"# Files to ignore (ex: my_txt.txt, my_pdf.pdf)\n\n\n")
+    # 2.2. Existing configuration
+    else:
+        __get_authentication()
 
     # 2. Configure remote repository
-    update_repo = True
-    repo_file = join(dirname(__file__), 'DRIVE_REPO.txt')
-    # 2.1. Check existing remote repository
-    if exists(repo_file):
-        with open(repo_file, 'r') as file:
-            drive_repo = file.read()
-        print(f"\nYou already defined the remote repository path to '{drive_repo}'.")
-        while (change := input("Update remote repository path: ").lower()) not in ['y', 'yes', 'n', 'no']:
-            pass
-        if change in ['n', 'no']:
-            update_repo = False
-    # 2.2. Define a new remote repository
-    if update_repo:
-        with open(repo_file, 'w') as file:
-            drive_repo = input("\nRemote repository path: ")
-            file.write(drive_repo)
+    with open(join(sync_info_dir, REMOTE_FILE), 'r') as f:
+        print(f"Current remote root repository in your Google Drive: /{f.read()}")
+    while (u := input("Update the current remote root path ? (y/n): ").lower()) not in ['y', 'yes', 'n', 'no']:
+        pass
+    if u in ['y', 'yes']:
+        with open(join(sync_info_dir, REMOTE_FILE), 'w') as file:
+            file.write(input("New remote root path: "))
 
-    # 3. Test the configuration
-    __get_authentication()
+    __get_local_ignore()
 
 
 def upload_data() -> None:
@@ -95,10 +93,16 @@ def upload_data() -> None:
     Synchronize the remote Drive repository with the local repository.
     """
 
+    print("\nGOOGLE DRIVE SYNCHRONIZATION - Upload"
+          "\n-------------------------------------")
+
     # 1. Authenticate
-    drive, project_id = __get_authentication()
+    print("\nAuthenticate...")
+    drive = __get_authentication()
+    project_id = __get_project_id(drive)
 
     # 2. Upload the local repository
+    print("\nUploading...")
     __upload_local_folder(drive=drive, folder_path=getcwd(), folder_id=project_id)
 
 
@@ -107,43 +111,49 @@ def download_data() -> None:
     Synchronize the local repository with the remote Drive repository.
     """
 
+    print("\nGOOGLE DRIVE SYNCHRONIZATION - Download"
+          "\n---------------------------------------")
+
     # 1. Authenticate
-    drive, project_id = __get_authentication()
+    print("\nAuthenticate...")
+    drive = __get_authentication()
+    project_id = __get_project_id(drive)
+    print(project_id)
 
     # 2. Download the remote repository
+    print("\nDownloading...")
     __download_remote_folder(drive=drive, folder_path=getcwd(), folder_id=project_id)
 
 
-def __get_authentication() -> Tuple[GoogleDrive, str]:
+def __get_authentication() -> GoogleDrive:
 
-    # 1. Check authentication files in the module repository
-    working_directory = getcwd()
-    chdir(dirname(__file__))
-    if not exists('client_secrets.json'):
-        raise FileNotFoundError("Authentication file not found. Please run '$drive_sync configure'.")
-    elif not exists('DRIVE_REPO.txt'):
-        raise FileNotFoundError("Remote repository name not found. Please run '$drive_sync configure'.")
+    # 1. Check the sync information repository (for upload / download cases)
+    local_root = getcwd()
+    sync_info_dir = join(local_root, SYNC_INFO_DIR)
+    if not exists(sync_info_dir) or False in [exists(join(sync_info_dir, file)) for file in
+                                              (AUTH_FILE, REMOTE_FILE, IGNORE_FILE)]:
+        raise FileNotFoundError("Missing authentication information. Please run '$dsync configure'.")
 
     # 2. Get authentication
+    chdir(sync_info_dir)
     auth = GoogleAuth()
     auth.LocalWebserverAuth()
-    drive = GoogleDrive(auth)
-    project_id = __get_project_id(drive)
+    chdir(local_root)
 
-    # 3. Return to the previous working directory
-    chdir(working_directory)
-    return drive, project_id
+    return GoogleDrive(auth)
 
 
 def __get_project_id(drive: GoogleDrive) -> str:
 
     # 1. Get the path to the remote folder
-    with open(join(dirname(__file__), 'DRIVE_REPO.txt'), 'r') as file:
-        project_path = file.read()
+    with open(join(getcwd(), SYNC_INFO_DIR, REMOTE_FILE), 'r') as file:
+        remote_root_path = file.read()
+        if len(remote_root_path) > 0 and remote_root_path[0] == '/':
+            remote_root_path = remote_root_path[1:]
 
     # 2. Get the id of the sub-folders step by step (starting from 'root')
     remote_folder_id = 'root'
-    for sub_folder in project_path.split('/'):
+    for sub_folder in remote_root_path.split('/'):
         # 2.1. Get the next sub-folder
         remote_tree = __get_remote_tree(drive=drive, parent_id=remote_folder_id)
         remote_folder = __get_remote_file(remote_tree=remote_tree, title=sub_folder)
@@ -156,6 +166,31 @@ def __get_project_id(drive: GoogleDrive) -> str:
         remote_folder_id = remote_folder['id']
 
     return remote_folder_id
+
+
+def __get_local_ignore() -> Dict[str, List[str]]:
+
+    # Get the ignore file content, then sort the items
+    ignore = {'extensions': [], 'files': [], 'folders': []}
+    with open(join(getcwd(), SYNC_INFO_DIR, IGNORE_FILE), 'r') as f:
+        for item in f.readlines():
+            # Comments or empty lines
+            if item == '\n' or item[0] == '#':
+                pass
+            # Extensions
+            elif item[0] == '*':
+                ignore['extensions'].append(item[2:-1])
+            # Folders
+            elif item[0] == '/':
+                ignore['folders'].append(item[1:-1])
+            # Entry without extension are considered as folders
+            elif len(item.split('.')) == 0:
+                ignore['folders'].append(item[:-1])
+            # Files
+            else:
+                ignore['files'].append(item[:-1])
+
+    return ignore
 
 
 def __get_remote_tree(drive: GoogleDrive,
@@ -199,6 +234,9 @@ def __upload_local_folder(drive: GoogleDrive,
                           folder_id: str,
                           space: str = '') -> None:
 
+    # 0. Get the ignored items
+    ignore = __get_local_ignore()
+
     # 1. Get local and remote list of files in the current folder
     local_tree = sorted(listdir(folder_path))
     remote_tree = __get_remote_tree(drive=drive, parent_id=folder_id)
@@ -213,7 +251,7 @@ def __upload_local_folder(drive: GoogleDrive,
         local_path = join(folder_path, local_file)
 
         # 3.1. Upload a folder
-        if isdir(local_path):
+        if isdir(local_path) and local_file not in ignore['folders'] and local_file.split('.')[-1] not in ignore['extensions']:
             # 3.1.1. Check that the remote folder exists
             remote_dir = __get_remote_file(remote_tree=remote_tree, title=local_file)
             if remote_dir is None:
@@ -225,7 +263,7 @@ def __upload_local_folder(drive: GoogleDrive,
             __upload_local_folder(drive=drive, folder_path=local_path, folder_id=remote_dir['id'], space=f'{space}   ')
 
         # 3.2. Upload a file
-        else:
+        elif isfile(local_path) and local_file not in ignore['files'] and local_file.split('.')[-1] not in ignore['extensions']:
             # 3.2.1. Check that the remote file exists
             remote_file = __get_remote_file(remote_tree=remote_tree, title=local_file)
             if remote_file is None:
@@ -247,6 +285,9 @@ def __download_remote_folder(drive: GoogleDrive,
                              folder_id: str,
                              space: str = '') -> None:
 
+    # 0. Get the ignored items
+    ignore = __get_local_ignore()
+
     # 1. Get local and remote list of files in the current folder
     local_tree = sorted(listdir(folder_path))
     remote_tree = __get_remote_tree(drive=drive, parent_id=folder_id)
@@ -255,9 +296,9 @@ def __download_remote_folder(drive: GoogleDrive,
     for local_file in local_tree:
         if local_file not in [remote_file['title'] for remote_file in remote_tree]:
             local_path = join(folder_path, local_file)
-            if isdir(local_path):
+            if isdir(local_path) and local_file not in ignore['folders']  and local_file.split('.')[-1] not in ignore['extensions']:
                 rmtree(local_path)
-            else:
+            elif isfile(local_path) and local_file not in ignore['files'] and local_file.split('.')[-1] not in ignore['extensions']:
                 remove(local_path)
 
     # 3. Check for new or modified files

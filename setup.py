@@ -19,5 +19,5 @@ setup(name=PROJECT,
       packages=package,
       package_dir=package_dir,
       package_data={PROJECT: ['*.txt', '*.json']},
-      install_requires=['pydrive'],
-      entry_points={'console_scripts': ['drive_sync=DriveSync.drive_sync:execute_cli']})
+      install_requires=['pydrive2'],
+      entry_points={'console_scripts': ['dsync=DriveSync.drive_sync:execute_cli']})
