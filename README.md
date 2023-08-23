@@ -40,7 +40,8 @@ For this example, we will synchronize the following fictive repositories:
 * local folder path: `/home/bob/my_project`
 * remote folder path: `/my_project`
 
-The project can be used with the **Command Line Interface** or with a **Python interpreter**.
+The project can be used with the [**Command Line Interface**](#command-line-interface) 
+or with a [**Python interpreter**](#python-interpreter).
 
 ### Command Line Interface
 
